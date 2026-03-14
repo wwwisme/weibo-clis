@@ -1,6 +1,7 @@
 # weibo-cli
 
 [![CI](https://github.com/jackwener/weibo-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/jackwener/weibo-cli/actions/workflows/ci.yml)
+[![PyPI version](https://badge.fury.io/py/weibo-cli.svg)](https://pypi.org/project/weibo-cli/)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.10-blue.svg)](https://pypi.org/project/weibo-cli/)
 
 A CLI for Weibo (微博) — browse hot topics, read timelines, and explore user profiles from the terminal 🐦
@@ -42,7 +43,22 @@ A CLI for Weibo (微博) — browse hot topics, read timelines, and explore user
 ### Installation
 
 ```bash
-# From source (recommended for now)
+# Recommended: uv tool (fast, isolated)
+uv tool install weibo-cli
+
+# Alternative: pipx
+pipx install weibo-cli
+```
+
+Upgrade to the latest version:
+
+```bash
+uv tool upgrade weibo-cli
+```
+
+Install from source:
+
+```bash
 git clone git@github.com:jackwener/weibo-cli.git
 cd weibo-cli
 uv sync
@@ -216,7 +232,22 @@ clawhub install weibo-cli
 ### 安装
 
 ```bash
-# 从源码安装
+# 推荐：uv tool（快速、隔离环境）
+uv tool install weibo-cli
+
+# 或者：pipx
+pipx install weibo-cli
+```
+
+升级到最新版本：
+
+```bash
+uv tool upgrade weibo-cli
+```
+
+从源码安装：
+
+```bash
 git clone git@github.com:jackwener/weibo-cli.git
 cd weibo-cli
 uv sync
