@@ -1,8 +1,8 @@
 # weibo-cli
 
 [![CI](https://github.com/jackwener/weibo-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/jackwener/weibo-cli/actions/workflows/ci.yml)
-[![PyPI version](https://badge.fury.io/py/weibo-cli.svg)](https://pypi.org/project/weibo-cli/)
-[![Python](https://img.shields.io/badge/python-%3E%3D3.10-blue.svg)](https://pypi.org/project/weibo-cli/)
+[![PyPI version](https://badge.fury.io/py/kabi-weibo-cli.svg)](https://pypi.org/project/kabi-weibo-cli/)
+[![Python](https://img.shields.io/badge/python-%3E%3D3.10-blue.svg)](https://pypi.org/project/kabi-weibo-cli/)
 
 A CLI for Weibo (微博) — browse hot topics, read timelines, and explore user profiles from the terminal 🐦
 
@@ -44,16 +44,16 @@ A CLI for Weibo (微博) — browse hot topics, read timelines, and explore user
 
 ```bash
 # Recommended: uv tool (fast, isolated)
-uv tool install weibo-cli
+uv tool install kabi-weibo-cli
 
 # Alternative: pipx
-pipx install weibo-cli
+pipx install kabi-weibo-cli
 ```
 
 Upgrade to the latest version:
 
 ```bash
-uv tool upgrade weibo-cli
+uv tool upgrade kabi-weibo-cli
 ```
 
 Install from source:
@@ -233,16 +233,16 @@ clawhub install weibo-cli
 
 ```bash
 # 推荐：uv tool（快速、隔离环境）
-uv tool install weibo-cli
+uv tool install kabi-weibo-cli
 
 # 或者：pipx
-pipx install weibo-cli
+pipx install kabi-weibo-cli
 ```
 
 升级到最新版本：
 
 ```bash
-uv tool upgrade weibo-cli
+uv tool upgrade kabi-weibo-cli
 ```
 
 从源码安装：
