@@ -44,6 +44,14 @@ FOLLOWERS_URL = "/ajax/friendships/friends"      # GET ?uid=&relate=fans → fol
 # ── Search ──────────────────────────────────────────────────────────
 MOBILE_BASE_URL = "https://m.weibo.cn"
 MOBILE_SEARCH_URL = "/api/container/getIndex"    # GET → mobile search (keyword)
+MOBILE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                  "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+                  "Mobile/15E148 Safari/604.1",
+    "Accept": "application/json, text/plain, */*",
+    "Referer": f"{MOBILE_BASE_URL}/",
+    "X-Requested-With": "XMLHttpRequest",
+}
 
 # ── Config ──────────────────────────────────────────────────────────
 GET_CONFIG_URL = "/ajax/config/get_config"       # GET → app config (auth)

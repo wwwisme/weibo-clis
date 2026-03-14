@@ -7,6 +7,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ._common import console, format_count, handle_command, require_auth, strip_html, structured_output_options
+from .renderers import render_comment_list, render_weibo_list
 
 
 @click.command(name="hot")
@@ -31,10 +32,8 @@ def hot(count, as_json, as_yaml):
             icon = item.get("icon_desc", item.get("label_name", ""))
             num = item.get("num", item.get("raw_hot", ""))
 
-            # Color the icon
             icon_color = "red" if icon == "沸" else "yellow" if icon == "热" else "green" if icon == "新" else ""
             icon_text = f"[{icon_color}]{icon}[/{icon_color}]" if icon_color and icon else icon
-
             num_str = format_count(num) if num else ""
 
             table.add_row(str(i), word, icon_text, num_str)
@@ -58,30 +57,7 @@ def feed(count, as_json, as_yaml):
 
     def _render(data):
         statuses = data.get("statuses", [])
-        if not statuses:
-            console.print("[yellow]暂无热门微博[/yellow]")
-            return
-
-        for i, s in enumerate(statuses[:count], 1):
-            user = s.get("user", {})
-            name = user.get("screen_name", "未知")
-            verified = " ✓" if user.get("verified") else ""
-            text = strip_html(s.get("text_raw", s.get("text", "")))
-            created = s.get("created_at", "")
-            reposts = s.get("reposts_count", 0)
-            comments = s.get("comments_count", 0)
-            likes = s.get("attitudes_count", 0)
-            mblogid = s.get("mblogid", "")
-
-            content = f"[bold cyan]{name}{verified}[/bold cyan]  [dim]{created}[/dim]\n"
-            content += f"{text[:200]}\n"
-            if s.get("pic_ids"):
-                content += f"[dim]📷 {len(s['pic_ids'])} 张图片[/dim]\n"
-            content += f"[dim]💬 {comments}  🔁 {reposts}  ❤️ {likes}  [/dim]"
-            if mblogid:
-                content += f"  [dim]ID: {mblogid}[/dim]"
-
-            console.print(Panel(content, title=f"#{i}", border_style="blue", padding=(0, 1)))
+        render_weibo_list(statuses, count=count, border_style="blue", empty_msg="[yellow]暂无热门微博[/yellow]")
 
     def _action(client):
         return client.get_hot_timeline(count=min(count, 20))
@@ -135,28 +111,11 @@ def comments(mblogid, count, as_json, as_yaml):
     """查看微博评论 (weibo comments <mblogid>)"""
     cred = require_auth()
 
-    # First get the weibo detail to find the numeric ID
     def _render(data):
         comment_list = data if isinstance(data, list) else data.get("data", []) if isinstance(data, dict) else []
-        if not comment_list:
-            console.print("[yellow]暂无评论[/yellow]")
-            return
-
-        for c in comment_list[:count]:
-            user = c.get("user", {})
-            name = user.get("screen_name", "未知")
-            text = strip_html(c.get("text", ""))
-            created = c.get("created_at", "")
-            likes = c.get("like_counts", 0)
-
-            console.print(f"  [bold]{name}[/bold]  [dim]{created}[/dim]")
-            console.print(f"    {text}")
-            if likes:
-                console.print(f"    [dim]❤️ {likes}[/dim]")
-            console.print()
+        render_comment_list(comment_list, count=count)
 
     def _action(client):
-        # Get weibo detail to find numeric ID
         weibo = client.get_weibo_detail(mblogid)
         weibo_id = str(weibo.get("id", weibo.get("mid", "")))
         return client.get_comments(weibo_id, count=count)
@@ -215,7 +174,7 @@ def search(keyword, count, page, as_json, as_yaml):
         # Extract weibos from cards
         statuses = []
         for card in cards:
-            if card.get("card_type") == 9:  # weibo card
+            if card.get("card_type") == 9:
                 mblog = card.get("mblog", {})
                 if mblog:
                     statuses.append(mblog)
@@ -230,27 +189,7 @@ def search(keyword, count, page, as_json, as_yaml):
             console.print(f"[yellow]未找到 \"{keyword}\" 相关微博[/yellow]")
             return
 
-        for i, s in enumerate(statuses[:count], 1):
-            user = s.get("user", {})
-            name = user.get("screen_name", "未知")
-            verified = " ✓" if user.get("verified") else ""
-            text = strip_html(s.get("text", ""))
-            created = s.get("created_at", "")
-            reposts = s.get("reposts_count", 0)
-            comments_count = s.get("comments_count", 0)
-            likes = s.get("attitudes_count", 0)
-            mblogid = s.get("mblogid", s.get("bid", ""))
-
-            content = f"[bold cyan]{name}{verified}[/bold cyan]  [dim]{created}[/dim]\n"
-            content += f"{text[:300]}\n"
-            if s.get("pic_ids") or s.get("pics"):
-                pic_count = len(s.get("pic_ids", s.get("pics", [])))
-                content += f"[dim]📷 {pic_count} 张图片[/dim]\n"
-            content += f"[dim]💬 {comments_count}  🔁 {reposts}  ❤️ {likes}[/dim]"
-            if mblogid:
-                content += f"  [dim]ID: {mblogid}[/dim]"
-
-            console.print(Panel(content, title=f"#{i}", border_style="magenta", padding=(0, 1)))
+        render_weibo_list(statuses, count=count, border_style="magenta")
 
     def _action(client):
         return client.search_weibo(keyword, page=page)

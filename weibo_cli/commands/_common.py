@@ -12,7 +12,7 @@ from rich.console import Console
 
 from ..auth import Credential, get_credential
 from ..client import WeiboClient
-from ..exceptions import WeiboApiError, SessionExpiredError, error_code_for_exception
+from ..exceptions import AuthRequiredError, WeiboApiError, SessionExpiredError, error_code_for_exception
 
 console = Console()
 
@@ -37,11 +37,11 @@ def format_count(n: int | str) -> str:
 
 
 def require_auth() -> Credential:
-    """Get credential or exit with error."""
+    """Get credential or raise AuthRequiredError."""
     cred = get_credential()
     if not cred:
         console.print("[yellow]⚠️  未登录[/yellow]，使用 [bold]weibo login[/bold] 扫码登录")
-        sys.exit(1)
+        raise AuthRequiredError()
     return cred
 
 

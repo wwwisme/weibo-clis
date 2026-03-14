@@ -23,6 +23,7 @@ from .constants import (
     HOT_SEARCH_URL,
     HOT_TIMELINE_URL,
     MOBILE_BASE_URL,
+    MOBILE_HEADERS,
     MOBILE_SEARCH_URL,
     MY_MBLOG_URL,
     PROFILE_INFO_URL,
@@ -30,7 +31,7 @@ from .constants import (
     SEARCH_BAND_URL,
     STATUSES_SHOW_URL,
 )
-from .exceptions import WeiboApiError, RateLimitError, SessionExpiredError
+from .exceptions import WeiboApiError, SessionExpiredError
 
 logger = logging.getLogger(__name__)
 
@@ -114,12 +115,12 @@ class WeiboClient:
             if value:
                 self.client.cookies.set(name, value)
 
-    def _handle_response(self, data: dict[str, Any], action: str, *, raw: bool = False) -> dict[str, Any]:
+    def _handle_response(self, data: dict[str, Any], action: str, *, unwrap: bool = True) -> dict[str, Any]:
         """Validate API response.
 
         Weibo uses {ok: 1, data: {...}} format for most endpoints.
-        When raw=True, return the full response dict (for APIs that don't wrap data).
-        When raw=False (default), unwrap and return data["data"].
+        When unwrap=True (default), extract and return data["data"].
+        When unwrap=False, return the full response dict (for APIs that don't wrap data).
         """
         ok = data.get("ok")
 
@@ -128,17 +129,19 @@ class WeiboClient:
 
         message = data.get("msg", data.get("message", "Unknown error"))
 
+        _SESSION_EXPIRED_KEYWORDS = ("请先登录", "请登录后使用", "请登录", "用户未登录")
         if ok == 0:
-            if "请先登录" in str(message) or "请登录后使用" in str(message) or "登录" in str(message):
+            msg_str = str(message)
+            if any(kw in msg_str for kw in _SESSION_EXPIRED_KEYWORDS):
                 raise SessionExpiredError()
             raise WeiboApiError(f"{action}: {message} (ok={ok})", code=ok, response=data)
 
         if ok == 1:
-            return data if raw else data.get("data", data)
+            return data.get("data", data) if unwrap else data
 
         # ok is some other truthy value (e.g. raw APIs return full dict)
         if ok:
-            return data if raw else data.get("data", data)
+            return data.get("data", data) if unwrap else data
 
         raise WeiboApiError(f"{action}: {message} (ok={ok})", code=ok, response=data)
 
@@ -181,18 +184,9 @@ class WeiboClient:
             raise WeiboApiError(f"Request failed after {self._max_retries} retries: {last_exc}") from last_exc
         raise WeiboApiError(f"Request failed after {self._max_retries} retries")
 
-    def _get(self, url: str, params: dict[str, Any] | None = None, action: str = "", *, raw: bool = False) -> dict[str, Any]:
+    def _get(self, url: str, params: dict[str, Any] | None = None, action: str = "", *, unwrap: bool = True) -> dict[str, Any]:
         data = self._request("GET", url, params=params)
-        try:
-            result = self._handle_response(data, action, raw=raw)
-            self._rate_limit_count = 0
-            return result
-        except RateLimitError:
-            logger.info("Retrying after rate-limit cooldown...")
-            data = self._request("GET", url, params=params)
-            result = self._handle_response(data, action, raw=raw)
-            self._rate_limit_count = 0
-            return result
+        return self._handle_response(data, action, unwrap=unwrap)
 
     # ── Hot Search / Trending ───────────────────────────────────────
 
@@ -217,17 +211,17 @@ class WeiboClient:
             "group_id": group_id, "containerid": group_id,
             "extparam": "discover|new_feed",
             "max_id": max_id, "count": str(count),
-        }, action="热门Feed", raw=True)
+        }, action="热门Feed", unwrap=False)
 
     def get_friends_timeline(self, count: int = 20, max_id: str = "0") -> dict[str, Any]:
         """Get friends timeline (关注者 feed, requires auth)."""
         return self._get(FRIENDS_TIMELINE_URL, params={
             "count": str(count), "max_id": max_id,
-        }, action="关注Feed", raw=True)
+        }, action="关注Feed", unwrap=False)
 
     def get_feed_groups(self) -> dict[str, Any]:
         """Get feed group configuration."""
-        return self._get(FEED_GROUPS_URL, params={"is_new_segment": "1", "fetch_hot": "1"}, action="Feed分组", raw=True)
+        return self._get(FEED_GROUPS_URL, params={"is_new_segment": "1", "fetch_hot": "1"}, action="Feed分组", unwrap=False)
 
     # ── User / Profile ──────────────────────────────────────────────
 
@@ -245,7 +239,7 @@ class WeiboClient:
 
     def get_weibo_detail(self, mblogid: str) -> dict[str, Any]:
         """Get single weibo detail by mblogid (e.g. 'Qw06Kd98p')."""
-        return self._get(STATUSES_SHOW_URL, params={"id": mblogid}, action="微博详情", raw=True)
+        return self._get(STATUSES_SHOW_URL, params={"id": mblogid}, action="微博详情", unwrap=False)
 
     # ── Comments / Reposts ──────────────────────────────────────────
 
@@ -260,47 +254,42 @@ class WeiboClient:
         """Get repost/forward list for a weibo."""
         return self._get(REPOST_TIMELINE_URL, params={
             "id": weibo_id, "page": str(page), "count": str(count),
-        }, action="转发", raw=True)
+        }, action="转发", unwrap=False)
 
     # ── Social ──────────────────────────────────────────────────────
 
     def get_following(self, uid: str, page: int = 1) -> dict[str, Any]:
         """Get user's following list."""
-        return self._get(FRIENDS_URL, params={"uid": uid, "page": str(page)}, action="关注列表", raw=True)
+        return self._get(FRIENDS_URL, params={"uid": uid, "page": str(page)}, action="关注列表", unwrap=False)
 
     def get_followers(self, uid: str, page: int = 1) -> dict[str, Any]:
         """Get user's follower list."""
         return self._get(FOLLOWERS_URL, params={
             "uid": uid, "page": str(page), "relate": "fans",
-        }, action="粉丝列表", raw=True)
+        }, action="粉丝列表", unwrap=False)
 
     # ── Search ──────────────────────────────────────────────────────
 
+    def _build_mobile_client(self) -> httpx.Client:
+        """Build a mobile API client for m.weibo.cn endpoints."""
+        cookies = self.credential.cookies if self.credential else {}
+        return httpx.Client(
+            base_url=MOBILE_BASE_URL,
+            headers=dict(MOBILE_HEADERS),
+            cookies=cookies,
+            follow_redirects=True,
+            timeout=httpx.Timeout(self._timeout),
+        )
+
     def search_weibo(self, keyword: str, page: int = 1) -> dict[str, Any]:
         """Search weibos by keyword using mobile API."""
-        # containerid format: 100103type=1&q=keyword
         containerid = f"100103type=1&q={keyword}"
         params = {
             "containerid": containerid,
             "page_type": "searchall",
             "page": str(page),
         }
-        # Use a separate httpx client for m.weibo.cn
-        cookies = {}
-        if self.credential:
-            cookies = self.credential.cookies
-        with httpx.Client(
-            base_url=MOBILE_BASE_URL,
-            headers={
-                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-                "Accept": "application/json, text/plain, */*",
-                "Referer": f"{MOBILE_BASE_URL}/",
-                "X-Requested-With": "XMLHttpRequest",
-            },
-            cookies=cookies,
-            follow_redirects=True,
-            timeout=httpx.Timeout(self._timeout),
-        ) as mobile:
+        with self._build_mobile_client() as mobile:
             data = self._request("GET", MOBILE_SEARCH_URL, params=params, client=mobile)
         return data
 
