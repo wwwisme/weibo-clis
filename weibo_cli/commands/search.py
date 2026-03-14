@@ -79,7 +79,6 @@ def feed(count, as_json, as_yaml):
             name = user.get("screen_name", "未知")
             verified = " ✓" if user.get("verified") else ""
             text = _strip_html(s.get("text_raw", s.get("text", "")))
-            source = s.get("source", "")
             created = s.get("created_at", "")
             reposts = s.get("reposts_count", 0)
             comments = s.get("comments_count", 0)

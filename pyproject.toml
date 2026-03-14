@@ -47,8 +47,10 @@ build-backend = "hatchling.build"
 packages = ["weibo_cli"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not smoke'"
 markers = [
-    "smoke: end-to-end tests requiring live cookies (deselect with '-m \"not smoke\"')",
+    "smoke: end-to-end tests requiring live cookies (run with: pytest -m smoke)",
 ]
 
 [tool.ruff]

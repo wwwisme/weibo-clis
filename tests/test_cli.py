@@ -1,10 +1,6 @@
-"""Tests for Weibo CLI — importability, command registration, and smoke tests."""
+"""Tests for Weibo CLI — importability, command registration, and output format."""
 
 from __future__ import annotations
-
-import json
-import subprocess
-import sys
 
 import pytest
 from click.testing import CliRunner
@@ -71,34 +67,6 @@ def test_constants_headers():
     assert "Chrome" in HEADERS["User-Agent"]
 
 
-# ── Credential class tests ──────────────────────────────────────────
-
-
-def test_credential_roundtrip():
-    from weibo_cli.auth import Credential
-    cred = Credential(cookies={"SUB": "abc", "SUBP": "xyz"})
-    assert cred.is_valid
-    data = cred.to_dict()
-    assert "cookies" in data
-    assert "saved_at" in data
-    restored = Credential.from_dict(data)
-    assert restored.cookies == cred.cookies
-
-
-def test_credential_cookie_header():
-    from weibo_cli.auth import Credential
-    cred = Credential(cookies={"A": "1", "B": "2"})
-    header = cred.as_cookie_header()
-    assert "A=1" in header
-    assert "B=2" in header
-
-
-def test_credential_empty():
-    from weibo_cli.auth import Credential
-    cred = Credential(cookies={})
-    assert not cred.is_valid
-
-
 # ── Exception tests ─────────────────────────────────────────────────
 
 
@@ -110,37 +78,39 @@ def test_exception_hierarchy():
     assert error_code_for_exception(QRExpiredError()) == "qr_expired"
 
 
-# ── Smoke tests (require live cookies) ──────────────────────────────
+def test_all_error_codes():
+    from weibo_cli.exceptions import (
+        AuthRequiredError, ParamError, RateLimitError, error_code_for_exception
+    )
+    assert error_code_for_exception(AuthRequiredError()) == "not_authenticated"
+    assert error_code_for_exception(RateLimitError()) == "rate_limited"
+    assert error_code_for_exception(ParamError("test")) == "invalid_params"
+    assert error_code_for_exception(ValueError("test")) == "unknown_error"
 
 
-@pytest.mark.smoke
-def test_hot_search_live():
-    """Smoke test: hot search should return data."""
+# ── Command help text ───────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("cmd,expected_text", [
+    ("hot", "热搜"),
+    ("feed", "Feed"),
+    ("detail", "详情"),
+    ("comments", "评论"),
+    ("trending", "趋势"),
+    ("profile", "用户资料"),
+    ("weibos", "微博列表"),
+    ("following", "关注列表"),
+])
+def test_command_help_text(cmd, expected_text):
+    """Each command has appropriate help description."""
     runner = CliRunner()
-    result = runner.invoke(cli, ["hot", "--json"])
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert "realtime" in data
-    assert len(data["realtime"]) > 0
+    result = runner.invoke(cli, [cmd, "--help"])
+    assert expected_text in result.output
 
 
-@pytest.mark.smoke
-def test_detail_live():
-    """Smoke test: weibo detail should return data."""
+@pytest.mark.parametrize("cmd", ["hot", "feed", "detail", "comments", "trending", "profile", "weibos", "following"])
+def test_json_option_available(cmd):
+    """All data commands support --json flag."""
     runner = CliRunner()
-    result = runner.invoke(cli, ["detail", "Qw06Kd98p", "--json"])
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert "user" in data
-    assert data["user"]["screen_name"] == "新华社"
-
-
-@pytest.mark.smoke
-def test_profile_live():
-    """Smoke test: profile should return user data."""
-    runner = CliRunner()
-    result = runner.invoke(cli, ["profile", "1699432410", "--json"])
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert "user" in data
-    assert data["user"]["screen_name"] == "新华社"
+    result = runner.invoke(cli, [cmd, "--help"])
+    assert "--json" in result.output

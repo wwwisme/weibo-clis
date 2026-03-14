@@ -38,7 +38,6 @@ from .constants import (
     QR_REDIRECT_URL,
     QR_SOURCE,
     QR_VERSION,
-    REQUIRED_COOKIES,
     RETCODE_QR_NOT_SCANNED,
     RETCODE_SUCCESS,
     SSO_SIGNIN_URL,

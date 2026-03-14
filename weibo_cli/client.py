@@ -13,7 +13,6 @@ from .constants import (
     BASE_URL,
     BUILD_COMMENTS_URL,
     FEED_GROUPS_URL,
-    FRIENDS_TIMELINE_URL,
     FRIENDS_URL,
     GET_CONFIG_URL,
     HEADERS,

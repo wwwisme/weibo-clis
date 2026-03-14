@@ -1,105 +1,175 @@
 ---
 name: weibo-cli
-description: Weibo CLI reverse-engineering notes and API reference for AI agent integration
+description: Use weibo-cli for ALL Weibo (微博) operations — browsing hot search, trending topics, hot timeline, weibo details, comments, user profiles, and following lists. Invoke whenever user requests any Weibo interaction.
+author: jackwener
+version: "0.1.0"
+tags:
+  - weibo
+  - sina
+  - 微博
+  - social-media
+  - cli
 ---
 
-# weibo-cli SKILL
+# weibo-cli — Weibo CLI Tool
 
-## Overview
+**Binary:** `weibo`
+**Credentials:** browser cookies (auto-extracted) or QR code login
 
-`weibo-cli` is a terminal client for Weibo (微博). This document captures the reverse-engineered API details and architecture for AI agent integration.
+## Setup
+
+```bash
+# Install (requires Python 3.10+)
+git clone git@github.com:jackwener/weibo-cli.git
+cd weibo-cli && uv sync
+```
 
 ## Authentication
 
-### QR Code Login Flow
+**IMPORTANT FOR AGENTS**: Before executing ANY weibo command, check if credentials exist first. Do NOT assume cookies are configured.
 
-```
-GET  passport.weibo.com/sso/signin → X-CSRF-TOKEN cookie
-GET  /sso/v2/qrcode/image?entry=miniblog&size=180 → qrid + image URL
-     QR data = https://passport.weibo.cn/signin/qrcode/scan?qr={qrid}
-GET  /sso/v2/qrcode/check?qrid=...&rid=...&ver=20250520 → poll (2s interval)
-     retcode=20000000 → success → follow crossdomain URL for session cookies
+### Step 0: Check if already authenticated
+
+```bash
+weibo status 2>/dev/null && echo "AUTH_OK" || echo "AUTH_NEEDED"
 ```
 
-### Browser Cookie Extraction
+If `AUTH_OK`, skip to [Command Reference](#command-reference).
+If `AUTH_NEEDED`, proceed to Step 1.
 
-Uses `browser-cookie3` subprocess to extract cookies from Chrome/Firefox/Edge/Brave/Arc for `.weibo.com` and `.sina.com` domains.
+### Step 1: Guide user to authenticate
 
-Required cookies: `SUB`, `SUBP`
+**Method A: Browser cookie extraction (recommended)**
 
-## API Reference
+Ensure user is logged into weibo.com in any supported browser (Chrome, Arc, Edge, Firefox, Brave, Chromium, Opera, Vivaldi, Safari, LibreWolf). weibo-cli auto-extracts cookies.
 
-Base URL: `https://weibo.com`
-
-All endpoints use `GET` method with `Accept: application/json` header.
-
-### Public APIs (no auth required)
-
-| Endpoint | Description | Key Response Fields |
-|----------|-------------|---------------------|
-| `/ajax/side/hotSearch` | Hot search sidebar | `data.realtime[].{word, num, icon_desc}` |
-| `/ajax/statuses/hot_band` | Hot search full list | `data.band_list[].{note, num, label_name}` |
-| `/ajax/feed/allGroups` | Feed group config | `groups[].{gid, title}` |
-
-### Authenticated APIs
-
-| Endpoint | Params | Description |
-|----------|--------|-------------|
-| `/ajax/feed/hottimeline` | `group_id, count, max_id` | Hot timeline feed |
-| `/ajax/profile/info` | `uid` | User profile |
-| `/ajax/statuses/mymblog` | `uid, page, feature` | User's weibo list |
-| `/ajax/statuses/show` | `id` (mblogid) | Single weibo detail |
-| `/ajax/statuses/buildComments` | `id, count, flow` | Comments |
-| `/ajax/statuses/repostTimeline` | `id, page, count` | Reposts |
-| `/ajax/friendships/friends` | `uid, page` | Following list |
-| `/ajax/side/searchBand` | — | Trending sidebar |
-
-### Response Format
-
-```json
-{"ok": 1, "data": {...}}     // success
-{"ok": -100, "url": "..."}   // session expired
-{"ok": 0, "message": "..."}  // error
+```bash
+weibo login
+weibo status
 ```
 
-## Anti-Detection Headers
+**Method B: QR code login**
 
-```python
-{
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ... Chrome/145.0.0.0 Safari/537.36",
-    "sec-ch-ua": '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"macOS"',
-}
+```bash
+weibo login
+# → Renders QR in terminal using Unicode half-blocks
+# → Scan with Weibo App (我的 → 扫一扫) → confirm
 ```
 
-## CLI Commands
+### Step 2: Handle common auth issues
 
-```
-weibo login          # QR code login
-weibo hot            # 热搜榜
-weibo feed           # 热门 Feed
-weibo trending       # 搜索趋势
-weibo detail <id>    # 微博详情
-weibo comments <id>  # 评论
-weibo profile <uid>  # 用户资料
-weibo weibos <uid>   # 用户微博列表
-weibo following <uid> # 关注列表
+| Symptom | Agent action |
+|---------|-------------|
+| `⚠️ 未登录` | Guide user to login to weibo.com in browser, then run `weibo login` |
+| `会话已过期` | Run `weibo logout && weibo login` |
+| Cookie extraction hangs | Browser may be running; close browser and retry |
+
+## Output Format
+
+### Default: Rich table (human-readable)
+
+```bash
+weibo hot                              # Pretty table output
 ```
 
-## Project Structure
+### JSON / YAML: structured output
 
+```bash
+weibo hot --json                       # JSON to stdout
+weibo hot --yaml                       # YAML output
+weibo hot --json | jq '.realtime[:3]'  # Filter with jq
 ```
-weibo_cli/
-├── __init__.py        # version
-├── constants.py       # endpoints, headers
-├── exceptions.py      # WeiboApiError hierarchy
-├── auth.py            # QR login + browser cookie extraction
-├── client.py          # WeiboClient with rate-limit/retry
-├── cli.py             # Click entry point
-└── commands/
-    ├── _common.py     # shared helpers
-    ├── auth.py        # login/logout/status/me
-    ├── search.py      # hot/feed/detail/comments/trending
-    └── personal.py    # profile/weibos/following
+
+Non-TTY stdout defaults to YAML automatically.
+
+## Command Reference
+
+### Reading
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `weibo hot` | Hot search list (50+ topics) | `weibo hot --json` |
+| `weibo trending` | Real-time search trends | `weibo trending --yaml` |
+| `weibo feed` | Hot timeline | `weibo feed --count 5 --json` |
+| `weibo detail <mblogid>` | View weibo with stats | `weibo detail Qw06Kd98p --json` |
+| `weibo comments <mblogid>` | View comments | `weibo comments Qw06Kd98p --count 10` |
+| `weibo profile <uid>` | User profile | `weibo profile 1699432410 --json` |
+| `weibo weibos <uid>` | User's published weibos | `weibo weibos 1699432410 --count 5` |
+| `weibo following <uid>` | User's following list | `weibo following 1699432410` |
+
+### Account
+
+| Command | Description |
+|---------|-------------|
+| `weibo login` | Extract cookies from browser / QR login |
+| `weibo logout` | Clear saved credentials |
+| `weibo status` | Check authentication status |
+| `weibo me` | Show current user profile |
+
+## Agent Workflow Examples
+
+### Browse hot topics and read details
+
+```bash
+# Get hot search topics
+MBLOG=$(weibo hot --json | jq -r '.realtime[0].mblog_id // empty')
+# Read a specific weibo
+weibo detail Qw06Kd98p --json | jq '{text: .text_raw, likes: .attitudes_count, comments: .comments_count}'
 ```
+
+### Analyze user profile
+
+```bash
+weibo profile 1699432410 --json | jq '.user | {name: .screen_name, followers: .followers_count, posts: .statuses_count}'
+weibo weibos 1699432410 --count 3 --json
+```
+
+### Read comments on a weibo
+
+```bash
+weibo comments Qw06Kd98p --json | jq '.data[:5] | .[].text_raw'
+```
+
+### Daily monitoring workflow
+
+```bash
+# Top 10 hot topics
+weibo hot --json | jq '.realtime[:10] | .[] | {rank, word, num}'
+
+# Trending sidebar
+weibo trending --yaml
+
+# Hot feed
+weibo feed --count 5 --json
+```
+
+## Error Codes
+
+Structured error codes returned in CLI output:
+- `not_authenticated` — cookies expired or missing
+- `rate_limited` — too many requests
+- `invalid_params` — missing or invalid parameters
+- `qr_expired` — QR code has expired
+- `api_error` — upstream Weibo API error
+
+## Limitations
+
+- **Read-only** — no posting, liking, or retweeting
+- **No DMs** — cannot access private messages
+- **No search** — keyword search not yet implemented
+- **Single account** — one set of credentials at a time
+- **Rate limited** — built-in Gaussian jitter delay (~1s) between requests
+
+## Anti-Detection Notes for Agents
+
+- **Do NOT parallelize requests** — the built-in rate-limit delay exists for account safety
+- **Batch operations**: when doing bulk work (e.g., reading many profiles), add delays between CLI calls
+- **Session stability**: all requests share consistent Chrome 145 headers per session
+
+## Safety Notes
+
+- Do not ask users to share raw cookie values in chat logs.
+- Prefer local browser cookie extraction over manual secret copy/paste.
+- If auth fails, ask the user to re-login via `weibo login`.
+- Agent should treat cookie values as secrets (do not echo to stdout unnecessarily).
+- Built-in rate-limit delay protects accounts; do not bypass it.

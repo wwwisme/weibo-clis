@@ -95,7 +95,7 @@ def me(as_json, as_yaml):
             pass
         # Fallback: get config to find current uid
         try:
-            config = client._get("/ajax/side/hotSearch", action="热搜")
+            client._get("/ajax/side/hotSearch", action="热搜")
             return {"error": "需要先逆向个人中心API"}
         except Exception:
             return {"error": "无法获取个人资料"}
