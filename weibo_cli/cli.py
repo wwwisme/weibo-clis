@@ -2,6 +2,9 @@
 
 Usage:
     weibo login / status / logout / me
+    weibo hot / feed / trending
+    weibo detail <mblogid> / comments <mblogid>
+    weibo profile <uid> / weibos <uid> / following <uid>
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ import logging
 import click
 
 from . import __version__
-from .commands import auth
+from .commands import auth, personal, search
 
 
 @click.group()
@@ -33,6 +36,20 @@ cli.add_command(auth.login)
 cli.add_command(auth.logout)
 cli.add_command(auth.status)
 cli.add_command(auth.me)
+
+# ─── Search / Feed commands ──────────────────────────────────────────
+
+cli.add_command(search.hot)
+cli.add_command(search.feed)
+cli.add_command(search.detail)
+cli.add_command(search.comments)
+cli.add_command(search.trending)
+
+# ─── Personal / Profile commands ─────────────────────────────────────
+
+cli.add_command(personal.profile)
+cli.add_command(personal.weibos)
+cli.add_command(personal.following)
 
 
 if __name__ == "__main__":

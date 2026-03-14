@@ -13,14 +13,36 @@ PASSPORT_URL = "https://passport.weibo.com"
 # ── QR Login API (passport.weibo.com) ───────────────────────────────
 QR_IMAGE_URL = "/sso/v2/qrcode/image"       # GET  → qrid + image URL
 QR_CHECK_URL = "/sso/v2/qrcode/check"       # GET  → poll scan status
-WEB_CONFIG_URL = "/sso/v2/web/config"        # POST → login config (pubkey, nonce)
+WEB_CONFIG_URL = "/sso/v2/web/config"        # POST → login config
 SSO_SIGNIN_URL = "/sso/signin"               # GET  → initial page (get CSRF token)
 
-# ── Weibo API (weibo.com) ───────────────────────────────────────────
-# TODO: Reverse-engineer these in Phase 2
-HOT_SEARCH_URL = "/ajax/side/hotSearch"
-USER_INFO_URL = "/ajax/profile/info"
-TIMELINE_URL = "/ajax/statuses/mymblog"
+# ── Hot Search / Trending ───────────────────────────────────────────
+HOT_SEARCH_URL = "/ajax/side/hotSearch"          # GET → sidebar hot search (public)
+HOT_BAND_URL = "/ajax/statuses/hot_band"         # GET → full hot search list (public)
+SEARCH_BAND_URL = "/ajax/side/searchBand"        # GET → trending sidebar
+
+# ── Feed / Timeline ────────────────────────────────────────────────
+HOT_TIMELINE_URL = "/ajax/feed/hottimeline"      # GET → hot feed (public)
+FRIENDS_TIMELINE_URL = "/ajax/feed/friendstimeline"  # GET → friends feed (auth)
+FEED_GROUPS_URL = "/ajax/feed/allGroups"         # GET → feed groups (public)
+
+# ── User / Profile ─────────────────────────────────────────────────
+PROFILE_INFO_URL = "/ajax/profile/info"          # GET ?uid= → user profile (auth)
+MY_MBLOG_URL = "/ajax/statuses/mymblog"          # GET ?uid=&page= → user weibos (auth)
+
+# ── Weibo Detail ────────────────────────────────────────────────────
+STATUSES_SHOW_URL = "/ajax/statuses/show"        # GET ?id= → single weibo detail (auth)
+
+# ── Comments / Reposts ──────────────────────────────────────────────
+BUILD_COMMENTS_URL = "/ajax/statuses/buildComments"  # GET → comments for a weibo
+REPOST_TIMELINE_URL = "/ajax/statuses/repostTimeline"  # GET → reposts for a weibo
+
+# ── Social ──────────────────────────────────────────────────────────
+FRIENDS_URL = "/ajax/friendships/friends"        # GET ?uid= → following list
+
+# ── Config ──────────────────────────────────────────────────────────
+GET_CONFIG_URL = "/ajax/config/get_config"       # GET → app config (auth)
+SIDE_CARDS_URL = "/ajax/side/cards"              # GET → sidebar cards
 
 # ── Request Headers (Chrome 145, macOS) ─────────────────────────────
 HEADERS = {
@@ -60,5 +82,4 @@ QR_VERSION = "20250520"
 RETCODE_SUCCESS = 20000000
 RETCODE_QR_NOT_SCANNED = 50114001
 RETCODE_QR_SCANNED = 50114002
-RETCODE_QR_CONFIRMED = 50114003  # Or success, need to verify
 RETCODE_QR_EXPIRED = 50114004
