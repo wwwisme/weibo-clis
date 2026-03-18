@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from weibo_cli.auth import Credential
 from weibo_cli.client import WeiboClient
 from weibo_cli.exceptions import SessionExpiredError, WeiboApiError
 
@@ -79,6 +80,53 @@ class TestRateLimiting:
         assert mock_client._request_count == 1
         mock_client._mark_request()
         assert mock_client._request_count == 2
+
+
+class TestCookieScopes:
+    def test_build_client_uses_desktop_scoped_cookies(self, monkeypatch):
+        captured = {}
+
+        def fake_http_client(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        monkeypatch.setattr("weibo_cli.client.httpx.Client", fake_http_client)
+        cred = Credential(
+            cookies={"SUB": "desktop"},
+            domain_cookies={
+                "weibo.com": {"SUB": "desktop"},
+                "weibo.cn": {"SUB": "mobile", "SSOLoginState": "1"},
+            },
+        )
+
+        client = WeiboClient(cred, request_delay=0)
+        client._build_client()
+
+        assert captured["cookies"]["SUB"] == "desktop"
+        assert "SSOLoginState" not in captured["cookies"]
+
+    def test_build_mobile_client_uses_mobile_scoped_cookies(self, monkeypatch):
+        captured = {}
+
+        def fake_http_client(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        monkeypatch.setattr("weibo_cli.client.httpx.Client", fake_http_client)
+        cred = Credential(
+            cookies={"SUB": "desktop", "SRF": "desktop-token"},
+            domain_cookies={
+                "weibo.com": {"SUB": "desktop", "SRF": "desktop-token"},
+                "weibo.cn": {"SUB": "mobile", "SSOLoginState": "1"},
+            },
+        )
+
+        client = WeiboClient(cred, request_delay=0)
+        client._build_mobile_client()
+
+        assert captured["cookies"]["SUB"] == "mobile"
+        assert captured["cookies"]["SSOLoginState"] == "1"
+        assert "x-xsrf-token" not in captured["headers"]
 
 
 # ── API method tests (mocked HTTP) ──────────────────────────────────

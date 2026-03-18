@@ -100,17 +100,37 @@ class TestHandleResponseUnwrap:
         with pytest.raises(WeiboApiError, match="登录设备异常"):
             mock_client._handle_response(raw, "test")
 
+    def test_auth_url_in_payload_raises_session_expired(self, mock_client):
+        raw = {
+            "ok": 0,
+            "message": "需要跳转",
+            "url": "https://passport.weibo.com/sso/signin?entry=miniblog",
+        }
+        with pytest.raises(SessionExpiredError):
+            mock_client._handle_response(raw, "test")
+
 
 # ── New API method tests ─────────────────────────────────────────────
 
 
-def _mock_response(data):
+def _mock_response(data, *, url="https://weibo.com/ajax/test"):
     """Create a mock httpx response for the given data."""
     resp = MagicMock()
     resp.status_code = 200
     resp.text = json.dumps(data)
     resp.json.return_value = data
     resp.cookies = httpx.Cookies()
+    resp.url = httpx.URL(url)
+    return resp
+
+
+def _mock_html_response(html, *, url):
+    """Create a mock HTML response."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.text = html
+    resp.cookies = httpx.Cookies()
+    resp.url = httpx.URL(url)
     return resp
 
 
@@ -136,6 +156,7 @@ class TestGetFriendsTimelineAPI:
         params = mock_client._http.request.call_args[1].get("params", {})
         assert params["count"] == "20"
         assert params["max_id"] == "0"
+        assert params["list_id"] == "0"
         assert "statuses" in result
 
 
@@ -174,4 +195,48 @@ class TestSearchWeiboAPI:
         assert result == search_response
         mock_mobile.request.assert_called_once()
         call_args = mock_mobile.request.call_args
-        assert call_args[1]["params"]["containerid"] == "100103type=1&q=test"
+        assert call_args[1]["params"]["containerid"] == "100103type=61&q=test"
+        assert "page" not in call_args[1]["params"]
+        assert call_args[1]["headers"]["Referer"].endswith("containerid=100103type%3D61%26q%3Dtest")
+
+    def test_search_weibo_login_payload_raises_session_expired(self, mock_client):
+        response = {"ok": 0, "message": "请先登录"}
+        mock_mobile = MagicMock()
+        mock_mobile.__enter__ = MagicMock(return_value=mock_mobile)
+        mock_mobile.__exit__ = MagicMock(return_value=False)
+        mock_mobile.request.return_value = _mock_response(
+            response,
+            url="https://m.weibo.cn/api/container/getIndex",
+        )
+
+        with patch.object(mock_client, "_build_mobile_client", return_value=mock_mobile):
+            with pytest.raises(SessionExpiredError):
+                mock_client.search_weibo("test")
+
+    def test_search_weibo_html_login_page_raises_session_expired(self, mock_client):
+        html = "<html><title>微博通行证</title><body>请先登录</body></html>"
+        mock_mobile = MagicMock()
+        mock_mobile.__enter__ = MagicMock(return_value=mock_mobile)
+        mock_mobile.__exit__ = MagicMock(return_value=False)
+        mock_mobile.request.return_value = _mock_html_response(
+            html,
+            url="https://passport.weibo.com/sso/signin?entry=miniblog",
+        )
+
+        with patch.object(mock_client, "_build_mobile_client", return_value=mock_mobile):
+            with pytest.raises(SessionExpiredError):
+                mock_client.search_weibo("test")
+
+    def test_search_weibo_generic_html_stays_api_error(self, mock_client):
+        html = "<html><body><h1>502 Bad Gateway</h1></body></html>"
+        mock_mobile = MagicMock()
+        mock_mobile.__enter__ = MagicMock(return_value=mock_mobile)
+        mock_mobile.__exit__ = MagicMock(return_value=False)
+        mock_mobile.request.return_value = _mock_html_response(
+            html,
+            url="https://m.weibo.cn/api/container/getIndex",
+        )
+
+        with patch.object(mock_client, "_build_mobile_client", return_value=mock_mobile):
+            with pytest.raises(WeiboApiError, match="Received HTML instead of JSON"):
+                mock_client.search_weibo("test")

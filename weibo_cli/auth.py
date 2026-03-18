@@ -61,33 +61,70 @@ POLL_TIMEOUT_S = 240  # 4 minutes
 class Credential:
     """Holds Weibo session cookies."""
 
-    def __init__(self, cookies: dict[str, str]):
-        self.cookies = cookies
+    def __init__(self, cookies: dict[str, str], domain_cookies: dict[str, dict[str, str]] | None = None):
+        self.cookies = dict(cookies)
+        self.domain_cookies = {
+            scope: dict(scope_cookies)
+            for scope, scope_cookies in (domain_cookies or {}).items()
+            if scope_cookies
+        }
 
     @property
     def is_valid(self) -> bool:
-        return bool(self.cookies)
+        return bool(self.cookies) or any(self.domain_cookies.values())
 
     def to_dict(self) -> dict[str, Any]:
-        return {"cookies": self.cookies, "saved_at": time.time()}
+        return {
+            "cookies": self.cookies,
+            "domain_cookies": self.domain_cookies,
+            "saved_at": time.time(),
+        }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Credential:
-        return cls(cookies=data.get("cookies", {}))
+        return cls(
+            cookies=data.get("cookies", {}),
+            domain_cookies=data.get("domain_cookies", {}),
+        )
 
-    def as_cookie_header(self) -> str:
-        return "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+    @staticmethod
+    def _scope_for_target(target: str) -> str:
+        host = urlparse(target).netloc or target
+        host = host.lower()
+        if host.endswith("weibo.cn"):
+            return "weibo.cn"
+        return "weibo.com"
+
+    def cookies_for_target(self, target: str | None = None) -> dict[str, str]:
+        if not target or not self.domain_cookies:
+            return dict(self.cookies)
+        scoped = self.domain_cookies.get(self._scope_for_target(target))
+        if scoped:
+            return dict(scoped)
+        return dict(self.cookies)
+
+    def as_cookie_header(self, target: str | None = None) -> str:
+        cookies = self.cookies_for_target(target)
+        return "; ".join(f"{k}={v}" for k, v in cookies.items())
 
 
 # ── Credential persistence ──────────────────────────────────────────
 
 
-def save_credential(credential: Credential) -> None:
-    """Save credential to config file."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CREDENTIAL_FILE.write_text(json.dumps(credential.to_dict(), indent=2, ensure_ascii=False))
-    CREDENTIAL_FILE.chmod(0o600)
-    logger.info("Credential saved to %s", CREDENTIAL_FILE)
+def save_credential(credential: Credential) -> bool:
+    """Save credential to config file.
+
+    Returns True when persistence succeeds.
+    """
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        CREDENTIAL_FILE.write_text(json.dumps(credential.to_dict(), indent=2, ensure_ascii=False))
+        CREDENTIAL_FILE.chmod(0o600)
+        logger.info("Credential saved to %s", CREDENTIAL_FILE)
+        return True
+    except OSError as e:
+        logger.warning("Failed to persist credential to %s: %s", CREDENTIAL_FILE, e)
+        return False
 
 
 def load_credential() -> Credential | None:
@@ -159,12 +196,41 @@ if target:
         print(json.dumps({"error": f"unsupported_browser: {target}"}))
         sys.exit(0)
 
+def load_scope(loader, domain_name, allowed_domains):
+    cookies = {}
+    try:
+        cj = loader(domain_name=domain_name)
+    except Exception:
+        return cookies
+
+    for cookie in cj:
+        domain = (cookie.domain or "").lower()
+        if cookie.value and any(domain.endswith(suffix) for suffix in allowed_domains):
+            cookies[cookie.name] = cookie.value
+    return cookies
+
 for name, loader in browsers:
     try:
-        cj = loader(domain_name=".weibo.com")
-        cookies = {c.name: c.value for c in cj if "weibo.com" in (c.domain or "") or "sina.com" in (c.domain or "")}
-        if cookies:
-            print(json.dumps({"browser": name, "cookies": cookies}))
+        domain_cookies = {}
+
+        desktop = load_scope(loader, ".weibo.com", (".weibo.com", ".sina.com"))
+        if desktop:
+            domain_cookies["weibo.com"] = desktop
+
+        mobile = {}
+        for domain_name in (".weibo.cn", ".m.weibo.cn"):
+            mobile.update(load_scope(loader, domain_name, (".weibo.cn",)))
+        if mobile:
+            domain_cookies["weibo.cn"] = mobile
+
+        if domain_cookies:
+            cookies = dict(domain_cookies.get("weibo.com", {}))
+            if not cookies:
+                for scope_cookies in domain_cookies.values():
+                    if scope_cookies:
+                        cookies = dict(scope_cookies)
+                        break
+            print(json.dumps({"browser": name, "cookies": cookies, "domain_cookies": domain_cookies}))
             sys.exit(0)
     except Exception:
         pass
@@ -196,9 +262,10 @@ print(json.dumps({"error": "no_cookies"}))
             return None
 
         cookies = data["cookies"]
+        domain_cookies = data.get("domain_cookies", {})
         browser_name = data["browser"]
-        logger.info("Found cookies in %s (%d cookies)", browser_name, len(cookies))
-        cred = Credential(cookies=cookies)
+        logger.info("Found cookies in %s (%d desktop cookies, %d scopes)", browser_name, len(cookies), len(domain_cookies))
+        cred = Credential(cookies=cookies, domain_cookies=domain_cookies)
         save_credential(cred)
         return cred
 
@@ -422,8 +489,11 @@ def qr_login() -> Credential:
                         raise RuntimeError("Login succeeded but no cookies were obtained")
 
                     credential = Credential(cookies=cookies)
-                    save_credential(credential)
-                    print("  ✅ 登录成功！凭证已保存到", CREDENTIAL_FILE)
+                    saved = save_credential(credential)
+                    if saved:
+                        print("  ✅ 登录成功！凭证已保存到", CREDENTIAL_FILE)
+                    else:
+                        print("  ✅ 登录成功！但无法写入本地凭证文件")
                     return credential
 
                 elif retcode == RETCODE_QR_NOT_SCANNED:

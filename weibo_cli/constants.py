@@ -50,6 +50,7 @@ MOBILE_HEADERS = {
                   "Mobile/15E148 Safari/604.1",
     "Accept": "application/json, text/plain, */*",
     "Referer": f"{MOBILE_BASE_URL}/",
+    "mweibo-pwa": "1",
     "X-Requested-With": "XMLHttpRequest",
 }
 

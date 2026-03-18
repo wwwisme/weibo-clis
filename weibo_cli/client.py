@@ -6,6 +6,7 @@ import logging
 import random
 import time
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -34,6 +35,25 @@ from .constants import (
 from .exceptions import WeiboApiError, SessionExpiredError
 
 logger = logging.getLogger(__name__)
+
+_SESSION_EXPIRED_KEYWORDS = ("请先登录", "请登录后使用", "请登录", "用户未登录")
+_AUTH_URL_MARKERS = (
+    "passport.weibo.com",
+    "passport.weibo.cn",
+    "login.sina.com.cn",
+    "/sso/",
+    "/signin",
+    "/login.php",
+)
+_AUTH_HTML_MARKERS = (
+    "请先登录",
+    "请登录后使用",
+    "扫码登录",
+    "微博通行证",
+    "passport.weibo",
+    "login.sina.com",
+    "sso/login",
+)
 
 
 class WeiboClient:
@@ -66,7 +86,7 @@ class WeiboClient:
     def _build_client(self) -> httpx.Client:
         cookies = {}
         if self.credential:
-            cookies = self.credential.cookies
+            cookies = self.credential.cookies_for_target(BASE_URL)
         return httpx.Client(
             base_url=BASE_URL,
             headers=dict(HEADERS),
@@ -115,6 +135,33 @@ class WeiboClient:
             if value:
                 self.client.cookies.set(name, value)
 
+    def _is_auth_url(self, value: Any) -> bool:
+        """Return True when *value* points to a known Weibo auth/SSO URL."""
+        if not value:
+            return False
+        url_str = str(value).lower()
+        return any(marker in url_str for marker in _AUTH_URL_MARKERS)
+
+    def _is_session_expired_payload(self, data: dict[str, Any]) -> bool:
+        """Detect JSON payloads that mean the current login session is invalid."""
+        message = str(data.get("msg", data.get("message", "")))
+        if any(kw in message for kw in _SESSION_EXPIRED_KEYWORDS):
+            return True
+
+        for field in ("url", "redirect", "login_url"):
+            if self._is_auth_url(data.get(field)):
+                return True
+
+        return False
+
+    def _is_auth_html_response(self, resp: httpx.Response, text: str) -> bool:
+        """Detect HTML SSO/login pages returned instead of JSON."""
+        if self._is_auth_url(resp.url):
+            return True
+
+        text_lower = text.lower()
+        return any(marker in text_lower for marker in _AUTH_HTML_MARKERS)
+
     def _handle_response(self, data: dict[str, Any], action: str, *, unwrap: bool = True) -> dict[str, Any]:
         """Validate API response.
 
@@ -129,10 +176,8 @@ class WeiboClient:
 
         message = data.get("msg", data.get("message", "Unknown error"))
 
-        _SESSION_EXPIRED_KEYWORDS = ("请先登录", "请登录后使用", "请登录", "用户未登录")
         if ok == 0:
-            msg_str = str(message)
-            if any(kw in msg_str for kw in _SESSION_EXPIRED_KEYWORDS):
+            if self._is_session_expired_payload(data):
                 raise SessionExpiredError()
             raise WeiboApiError(f"{action}: {message} (ok={ok})", code=ok, response=data)
 
@@ -171,9 +216,14 @@ class WeiboClient:
 
                 resp.raise_for_status()
                 text = resp.text
-                if text.startswith("<"):
+                if text.lstrip().startswith("<"):
+                    if self._is_auth_html_response(resp, text):
+                        raise SessionExpiredError()
                     raise WeiboApiError(f"Received HTML instead of JSON from {url}")
-                return resp.json()
+                try:
+                    return resp.json()
+                except ValueError as exc:
+                    raise WeiboApiError(f"Invalid JSON response from {url}") from exc
 
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_exc = exc
@@ -213,10 +263,10 @@ class WeiboClient:
             "max_id": max_id, "count": str(count),
         }, action="热门Feed", unwrap=False)
 
-    def get_friends_timeline(self, count: int = 20, max_id: str = "0") -> dict[str, Any]:
+    def get_friends_timeline(self, count: int = 20, max_id: str = "0", list_id: str = "0") -> dict[str, Any]:
         """Get friends timeline (关注者 feed, requires auth)."""
         return self._get(FRIENDS_TIMELINE_URL, params={
-            "count": str(count), "max_id": max_id,
+            "count": str(count), "max_id": max_id, "list_id": list_id,
         }, action="关注Feed", unwrap=False)
 
     def get_feed_groups(self) -> dict[str, Any]:
@@ -272,10 +322,14 @@ class WeiboClient:
 
     def _build_mobile_client(self) -> httpx.Client:
         """Build a mobile API client for m.weibo.cn endpoints."""
-        cookies = self.credential.cookies if self.credential else {}
+        cookies = self.credential.cookies_for_target(MOBILE_BASE_URL) if self.credential else {}
+        headers = dict(MOBILE_HEADERS)
+        xsrf_token = cookies.get("XSRF-TOKEN") or cookies.get("SRF")
+        if xsrf_token:
+            headers["x-xsrf-token"] = xsrf_token
         return httpx.Client(
             base_url=MOBILE_BASE_URL,
-            headers=dict(MOBILE_HEADERS),
+            headers=headers,
             cookies=cookies,
             follow_redirects=True,
             timeout=httpx.Timeout(self._timeout),
@@ -283,15 +337,20 @@ class WeiboClient:
 
     def search_weibo(self, keyword: str, page: int = 1) -> dict[str, Any]:
         """Search weibos by keyword using mobile API."""
-        containerid = f"100103type=1&q={keyword}"
+        containerid = f"100103type=61&q={keyword}"
         params = {
             "containerid": containerid,
             "page_type": "searchall",
-            "page": str(page),
+        }
+        if page > 1:
+            params["page"] = str(page)
+
+        headers = {
+            "Referer": f"{MOBILE_BASE_URL}/search?containerid={quote(containerid, safe='')}",
         }
         with self._build_mobile_client() as mobile:
-            data = self._request("GET", MOBILE_SEARCH_URL, params=params, client=mobile)
-        return data
+            data = self._request("GET", MOBILE_SEARCH_URL, params=params, headers=headers, client=mobile)
+        return self._handle_response(data, "搜索", unwrap=False)
 
     # ── Config ──────────────────────────────────────────────────────
 

@@ -40,6 +40,7 @@ class TestCredential:
     def test_from_dict(self):
         cred = Credential.from_dict({"cookies": {"SUB": "abc"}, "saved_at": 0})
         assert cred.cookies == {"SUB": "abc"}
+        assert cred.domain_cookies == {}
 
     def test_from_dict_missing_cookies(self):
         cred = Credential.from_dict({})
@@ -53,11 +54,30 @@ class TestCredential:
         assert "B=2" in header
         assert "; " in header
 
+    def test_domain_scoped_cookies(self):
+        cred = Credential(
+            cookies={"SUB": "desktop"},
+            domain_cookies={
+                "weibo.com": {"SUB": "desktop"},
+                "weibo.cn": {"SUB": "mobile", "SSOLoginState": "1"},
+            },
+        )
+        assert cred.cookies_for_target("https://weibo.com") == {"SUB": "desktop"}
+        assert cred.cookies_for_target("https://m.weibo.cn") == {"SUB": "mobile", "SSOLoginState": "1"}
+        assert "SSOLoginState=1" in cred.as_cookie_header("https://m.weibo.cn")
+
     def test_roundtrip(self):
-        original = Credential(cookies={"SUB": "abc", "SUBP": "xyz", "X-CSRF-TOKEN": "csrf"})
+        original = Credential(
+            cookies={"SUB": "abc", "SUBP": "xyz", "X-CSRF-TOKEN": "csrf"},
+            domain_cookies={
+                "weibo.com": {"SUB": "abc"},
+                "weibo.cn": {"SUB": "mobile", "SSOLoginState": "1"},
+            },
+        )
         d = original.to_dict()
         restored = Credential.from_dict(d)
         assert restored.cookies == original.cookies
+        assert restored.domain_cookies == original.domain_cookies
 
 
 # ── Credential persistence ──────────────────────────────────────────
@@ -148,12 +168,20 @@ class TestBrowserExtraction:
 
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = json.dumps({"browser": "Chrome", "cookies": {"SUB": "extracted"}})
+        mock_result.stdout = json.dumps({
+            "browser": "Chrome",
+            "cookies": {"SUB": "desktop"},
+            "domain_cookies": {
+                "weibo.com": {"SUB": "desktop"},
+                "weibo.cn": {"SUB": "mobile", "SSOLoginState": "1"},
+            },
+        })
 
         monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
         cred = extract_browser_credential()
         assert cred is not None
-        assert cred.cookies["SUB"] == "extracted"
+        assert cred.cookies["SUB"] == "desktop"
+        assert cred.cookies_for_target("https://m.weibo.cn")["SUB"] == "mobile"
 
     def test_extraction_no_cookies(self, monkeypatch):
         mock_result = MagicMock()
@@ -209,6 +237,18 @@ class TestBrowserExtraction:
         cred = extract_browser_credential(cookie_source="Firefox")
         assert cred is not None
         assert "Firefox" in captured_cmd["args"]
+
+    def test_extraction_returns_credential_when_save_fails(self, monkeypatch):
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({"browser": "Chrome", "cookies": {"SUB": "extracted"}})
+
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+        monkeypatch.setattr("weibo_cli.auth.save_credential", lambda credential: False)
+
+        cred = extract_browser_credential()
+        assert cred is not None
+        assert cred.cookies["SUB"] == "extracted"
 
 
 # ── get_credential chain ────────────────────────────────────────────
