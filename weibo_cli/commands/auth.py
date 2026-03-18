@@ -3,11 +3,44 @@
 from __future__ import annotations
 
 import json
+import re
 
 import click
 from rich.panel import Panel
 
 from ._common import console, handle_command, require_auth, structured_output_options
+
+
+_CURRENT_UID_HTML_PATTERNS = (
+    r'"uid"\s*:\s*(\d{5,})\s*,\s*"apmSampleRate"',
+    r'\$CONFIG\[\s*["\']uid["\']\s*\]\s*=\s*["\'](\d+)',
+)
+
+
+def _extract_current_uid_from_feed_groups(data):
+    """Extract the current account UID from feed group configuration."""
+    if not isinstance(data, dict):
+        return None
+
+    for section in data.get("groups", []):
+        groups = section.get("group", []) if isinstance(section, dict) else []
+        for group in groups:
+            uid = group.get("uid") if isinstance(group, dict) else None
+            if uid:
+                return str(uid)
+    return None
+
+
+def _extract_current_uid_from_homepage_html(html: str) -> str | None:
+    """Extract the current account UID from the logged-in homepage HTML."""
+    if not html:
+        return None
+
+    for pattern in _CURRENT_UID_HTML_PATTERNS:
+        match = re.search(pattern, html)
+        if match:
+            return match.group(1)
+    return None
 
 
 @click.command()
@@ -125,10 +158,19 @@ def me(as_json, as_yaml):
             return data
         except Exception:
             pass
-        # Fallback: get config to find current UID, then get profile
+        # Fallback: feed groups still expose the current UID
         try:
-            config = client.get_config()
-            uid = str(config.get("uid", config.get("user", {}).get("id", "")))
+            groups = client.get_feed_groups()
+            uid = _extract_current_uid_from_feed_groups(groups)
+            if uid:
+                return client.get_profile(uid)
+        except Exception:
+            pass
+        # Last fallback: parse the logged-in homepage config block
+        try:
+            resp = client.client.get("/")
+            resp.raise_for_status()
+            uid = _extract_current_uid_from_homepage_html(resp.text)
             if uid:
                 return client.get_profile(uid)
         except Exception:

@@ -7,7 +7,14 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from click.testing import CliRunner
 
+from weibo_cli.auth import Credential
+from weibo_cli.commands import auth as auth_commands
+from weibo_cli.commands.auth import (
+    _extract_current_uid_from_feed_groups,
+    _extract_current_uid_from_homepage_html,
+)
 from weibo_cli.commands._common import format_count, strip_html
 from weibo_cli.exceptions import SessionExpiredError, WeiboApiError
 
@@ -65,6 +72,26 @@ class TestFormatCount:
 
     def test_zero(self):
         assert format_count(0) == "0"
+
+
+class TestCurrentUidExtraction:
+    def test_extract_uid_from_feed_groups(self):
+        data = {
+            "groups": [
+                {"title": "默认分组", "group": [{"gid": "1", "uid": "6205005713", "title": "全部关注"}]},
+            ],
+        }
+        assert _extract_current_uid_from_feed_groups(data) == "6205005713"
+
+    def test_extract_uid_from_feed_groups_missing(self):
+        assert _extract_current_uid_from_feed_groups({"groups": [{"group": [{}]}]}) is None
+
+    def test_extract_uid_from_homepage_html(self):
+        html = '<script>window.__INITIAL_STATE__={"uid":6205005713,"apmSampleRate":0.01}</script>'
+        assert _extract_current_uid_from_homepage_html(html) == "6205005713"
+
+    def test_extract_uid_from_homepage_html_missing(self):
+        assert _extract_current_uid_from_homepage_html("<html></html>") is None
 
 
 # ── _handle_response unwrap tests ────────────────────────────────────
@@ -240,3 +267,71 @@ class TestSearchWeiboAPI:
         with patch.object(mock_client, "_build_mobile_client", return_value=mock_mobile):
             with pytest.raises(WeiboApiError, match="Received HTML instead of JSON"):
                 mock_client.search_weibo("test")
+
+
+class TestMeCommand:
+    def test_me_uses_feed_groups_fallback(self, monkeypatch):
+        runner = CliRunner()
+        expected = {"user": {"screen_name": "测试用户", "followers_count": 1}}
+
+        class FakeClient:
+            def __init__(self):
+                self.client = MagicMock()
+
+            def _get(self, path, action=""):
+                raise WeiboApiError(f"{action}: not found")
+
+            def get_feed_groups(self):
+                return {"groups": [{"group": [{"uid": "6205005713"}]}]}
+
+            def get_profile(self, uid):
+                assert uid == "6205005713"
+                return expected
+
+        monkeypatch.setattr(auth_commands, "require_auth", lambda: Credential(cookies={"SUB": "test"}))
+
+        def fake_handle_command(credential, *, action, render=None, as_json=False, as_yaml=False):
+            data = action(FakeClient())
+            print(json.dumps(data, ensure_ascii=False))
+            return data
+
+        monkeypatch.setattr(auth_commands, "handle_command", fake_handle_command)
+
+        result = runner.invoke(auth_commands.me, ["--json"])
+        assert result.exit_code == 0
+        assert json.loads(result.output)["user"]["screen_name"] == "测试用户"
+
+    def test_me_uses_homepage_html_fallback(self, monkeypatch):
+        runner = CliRunner()
+        expected = {"user": {"screen_name": "首页用户", "followers_count": 2}}
+
+        class FakeClient:
+            def __init__(self):
+                response = MagicMock()
+                response.text = '<script>window.__INITIAL_STATE__={"uid":6205005713,"apmSampleRate":0.01}</script>'
+                response.raise_for_status.return_value = None
+                self.client = MagicMock()
+                self.client.get.return_value = response
+
+            def _get(self, path, action=""):
+                raise WeiboApiError(f"{action}: not found")
+
+            def get_feed_groups(self):
+                raise WeiboApiError("Feed分组: unavailable")
+
+            def get_profile(self, uid):
+                assert uid == "6205005713"
+                return expected
+
+        monkeypatch.setattr(auth_commands, "require_auth", lambda: Credential(cookies={"SUB": "test"}))
+
+        def fake_handle_command(credential, *, action, render=None, as_json=False, as_yaml=False):
+            data = action(FakeClient())
+            print(json.dumps(data, ensure_ascii=False))
+            return data
+
+        monkeypatch.setattr(auth_commands, "handle_command", fake_handle_command)
+
+        result = runner.invoke(auth_commands.me, ["--json"])
+        assert result.exit_code == 0
+        assert json.loads(result.output)["user"]["screen_name"] == "首页用户"
