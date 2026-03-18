@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import random
+import re
 import time
 from typing import Any
 from urllib.parse import quote
@@ -27,12 +29,15 @@ from .constants import (
     MOBILE_HEADERS,
     MOBILE_SEARCH_URL,
     MY_MBLOG_URL,
+    PC_REALTIME_SEARCH_URL,
+    PC_SEARCH_BASE_URL,
+    PC_SEARCH_HEADERS,
     PROFILE_INFO_URL,
     REPOST_TIMELINE_URL,
     SEARCH_BAND_URL,
     STATUSES_SHOW_URL,
 )
-from .exceptions import WeiboApiError, SessionExpiredError
+from .exceptions import CaptchaChallengeError, WeiboApiError, SessionExpiredError
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +59,48 @@ _AUTH_HTML_MARKERS = (
     "login.sina.com",
     "sso/login",
 )
+_CAPTCHA_KEYWORDS = (
+    "验证码",
+    "请输入验证码",
+    "图形验证码",
+    "安全验证",
+    "完成验证",
+    "异常验证",
+)
+_CAPTCHA_URL_MARKERS = (
+    "captcha",
+    "/verify",
+    "passport.weibo.com/visitor/visitor",
+    "passport.weibo.com/visitor/genvisitor",
+)
+_PC_SEARCH_PAGE_MARKERS = (
+    "<title>微博搜索</title>",
+    "$config['product'] = 'search';",
+    'class="m-main-nav"',
+)
+_PC_SEARCH_CARD_RE = re.compile(
+    r'<div class="card-wrap" action-type="feed_list_item" mid="(?P<mid>\d+)"(?P<body>.*?)<!--/card-wrap-->',
+    re.S,
+)
+_PC_USER_RE = re.compile(
+    r'<a href="(?P<href>//weibo\.com/[^"]+)" class="name"[^>]*>(?P<name>.*?)</a>',
+    re.S,
+)
+_PC_FROM_RE = re.compile(
+    r'<div class="from"[^>]*>\s*<a href="(?P<href>//weibo\.com/[^"]+)"[^>]*>\s*(?P<created>.*?)\s*</a>(?P<rest>.*?)</div>',
+    re.S,
+)
+_PC_SOURCE_RE = re.compile(r"来自\s*<a[^>]*>(?P<source>.*?)</a>", re.S)
+_PC_TEXT_FULL_RE = re.compile(r'<p class="txt"[^>]*node-type="feed_list_content_full"[^>]*>(?P<text>.*?)</p>', re.S)
+_PC_TEXT_RE = re.compile(r'<p class="txt"[^>]*node-type="feed_list_content"[^>]*>(?P<text>.*?)</p>', re.S)
+_PC_ACTION_RE = re.compile(r'<a[^>]*action-type="(?P<action>feed_list_(?:forward|comment|like))"[^>]*>(?P<html>.*?)</a>', re.S)
+_PC_PIC_IDS_RE = re.compile(r"pic_ids=([^\"&]+)")
+_PC_UID_RE = re.compile(r"//weibo\.com/(?:u/)?(?P<uid>\d+)")
+_PC_MBLOGID_RE = re.compile(r"//weibo\.com/(?:u/)?\d+/(?P<mblogid>[A-Za-z0-9]+)")
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_HTML_BR_RE = re.compile(r"<br\s*/?>", re.I)
+_HTML_IMG_ALT_RE = re.compile(r'<img[^>]+(?:alt|title)="([^"]+)"[^>]*>', re.I)
+_HTML_UNFOLD_RE = re.compile(r'<a[^>]*action-type="fl_(?:unfold|fold)"[^>]*>.*?</a>', re.S)
 
 
 class WeiboClient:
@@ -142,6 +189,25 @@ class WeiboClient:
         url_str = str(value).lower()
         return any(marker in url_str for marker in _AUTH_URL_MARKERS)
 
+    def _is_captcha_url(self, value: Any) -> bool:
+        """Return True when *value* looks like a captcha/verification URL."""
+        if not value:
+            return False
+        url_str = str(value).lower()
+        return any(marker in url_str for marker in _CAPTCHA_URL_MARKERS)
+
+    def _is_captcha_payload(self, data: dict[str, Any]) -> bool:
+        """Detect payloads that require captcha or risk verification."""
+        message = str(data.get("msg", data.get("message", "")))
+        if any(keyword in message for keyword in _CAPTCHA_KEYWORDS):
+            return True
+
+        for field in ("url", "redirect", "login_url", "scheme"):
+            if self._is_captcha_url(data.get(field)):
+                return True
+
+        return False
+
     def _is_session_expired_payload(self, data: dict[str, Any]) -> bool:
         """Detect JSON payloads that mean the current login session is invalid."""
         message = str(data.get("msg", data.get("message", "")))
@@ -162,6 +228,14 @@ class WeiboClient:
         text_lower = text.lower()
         return any(marker in text_lower for marker in _AUTH_HTML_MARKERS)
 
+    def _is_captcha_html_response(self, resp: httpx.Response, text: str) -> bool:
+        """Detect captcha/verification HTML pages returned instead of JSON."""
+        if self._is_captcha_url(resp.url):
+            return True
+
+        text_lower = text.lower()
+        return any(keyword.lower() in text_lower for keyword in _CAPTCHA_KEYWORDS)
+
     def _handle_response(self, data: dict[str, Any], action: str, *, unwrap: bool = True) -> dict[str, Any]:
         """Validate API response.
 
@@ -172,11 +246,15 @@ class WeiboClient:
         ok = data.get("ok")
 
         if ok == -100:
+            if self._is_captcha_payload(data):
+                raise CaptchaChallengeError()
             raise SessionExpiredError()
 
         message = data.get("msg", data.get("message", "Unknown error"))
 
         if ok == 0:
+            if self._is_captcha_payload(data):
+                raise CaptchaChallengeError()
             if self._is_session_expired_payload(data):
                 raise SessionExpiredError()
             raise WeiboApiError(f"{action}: {message} (ok={ok})", code=ok, response=data)
@@ -192,7 +270,7 @@ class WeiboClient:
 
     # ── Request with retry ──────────────────────────────────────────
 
-    def _request(self, method: str, url: str, *, client: httpx.Client | None = None, **kwargs) -> dict[str, Any]:
+    def _request_response(self, method: str, url: str, *, client: httpx.Client | None = None, **kwargs) -> httpx.Response:
         self._rate_limit_delay()
         last_exc: Exception | None = None
         http = client or self.client
@@ -215,15 +293,7 @@ class WeiboClient:
                     continue
 
                 resp.raise_for_status()
-                text = resp.text
-                if text.lstrip().startswith("<"):
-                    if self._is_auth_html_response(resp, text):
-                        raise SessionExpiredError()
-                    raise WeiboApiError(f"Received HTML instead of JSON from {url}")
-                try:
-                    return resp.json()
-                except ValueError as exc:
-                    raise WeiboApiError(f"Invalid JSON response from {url}") from exc
+                return resp
 
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_exc = exc
@@ -233,6 +303,29 @@ class WeiboClient:
         if last_exc:
             raise WeiboApiError(f"Request failed after {self._max_retries} retries: {last_exc}") from last_exc
         raise WeiboApiError(f"Request failed after {self._max_retries} retries")
+
+    def _request(self, method: str, url: str, *, client: httpx.Client | None = None, **kwargs) -> dict[str, Any]:
+        resp = self._request_response(method, url, client=client, **kwargs)
+        text = resp.text
+        if text.lstrip().startswith("<"):
+            if self._is_captcha_html_response(resp, text):
+                raise CaptchaChallengeError()
+            if self._is_auth_html_response(resp, text):
+                raise SessionExpiredError()
+            raise WeiboApiError(f"Received HTML instead of JSON from {url}")
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise WeiboApiError(f"Invalid JSON response from {url}") from exc
+
+    def _request_html(self, method: str, url: str, *, client: httpx.Client | None = None, **kwargs) -> str:
+        resp = self._request_response(method, url, client=client, **kwargs)
+        text = resp.text
+        if self._is_captcha_html_response(resp, text):
+            raise CaptchaChallengeError()
+        if self._is_auth_html_response(resp, text):
+            raise SessionExpiredError()
+        return text
 
     def _get(self, url: str, params: dict[str, Any] | None = None, action: str = "", *, unwrap: bool = True) -> dict[str, Any]:
         data = self._request("GET", url, params=params)
@@ -335,8 +428,130 @@ class WeiboClient:
             timeout=httpx.Timeout(self._timeout),
         )
 
-    def search_weibo(self, keyword: str, page: int = 1) -> dict[str, Any]:
-        """Search weibos by keyword using mobile API."""
+    def _build_pc_search_client(self) -> httpx.Client:
+        """Build a desktop search client for s.weibo.com HTML search."""
+        cookies = self.credential.cookies_for_target(BASE_URL) if self.credential else {}
+        return httpx.Client(
+            base_url=PC_SEARCH_BASE_URL,
+            headers=dict(PC_SEARCH_HEADERS),
+            cookies=cookies,
+            follow_redirects=True,
+            timeout=httpx.Timeout(self._timeout),
+        )
+
+    def _strip_html_fragment(self, fragment: str) -> str:
+        """Convert an HTML fragment from PC search into readable plain text."""
+        text = fragment or ""
+        text = _HTML_UNFOLD_RE.sub("", text)
+        text = _HTML_IMG_ALT_RE.sub(lambda match: match.group(1), text)
+        text = _HTML_BR_RE.sub("\n", text)
+        text = _HTML_TAG_RE.sub("", text)
+        text = html.unescape(text).replace("\u200b", "")
+        lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+        return "\n".join(line for line in lines if line).strip()
+
+    def _extract_pc_action_counts(self, block: str) -> dict[str, int]:
+        counts = {
+            "feed_list_forward": 0,
+            "feed_list_comment": 0,
+            "feed_list_like": 0,
+        }
+        for match in _PC_ACTION_RE.finditer(block):
+            action = match.group("action")
+            text = self._strip_html_fragment(match.group("html"))
+            digits = re.search(r"\d[\d,]*", text)
+            counts[action] = int(digits.group(0).replace(",", "")) if digits else 0
+        return counts
+
+    def _build_search_result(self, statuses: list[dict[str, Any]], *, source: str) -> dict[str, Any]:
+        return {
+            "ok": 1,
+            "search_source": source,
+            "data": {
+                "cards": [{"card_type": 9, "mblog": status} for status in statuses],
+            },
+        }
+
+    def _parse_pc_search_card(self, mid: str, block: str) -> dict[str, Any] | None:
+        user_match = _PC_USER_RE.search(block)
+        from_match = _PC_FROM_RE.search(block)
+        if not user_match or not from_match:
+            return None
+
+        user_href = user_match.group("href")
+        weibo_href = from_match.group("href")
+        uid_match = _PC_UID_RE.search(user_href)
+        if not uid_match:
+            return None
+
+        full_text_match = _PC_TEXT_FULL_RE.search(block)
+        text_match = full_text_match or _PC_TEXT_RE.search(block)
+        text_raw = self._strip_html_fragment(text_match.group("text")) if text_match else ""
+
+        source_match = _PC_SOURCE_RE.search(from_match.group("rest"))
+        counts = self._extract_pc_action_counts(block)
+        pic_ids_match = _PC_PIC_IDS_RE.search(block)
+        pic_ids = [pic_id for pic_id in (pic_ids_match.group(1).split(",") if pic_ids_match else []) if pic_id]
+        mblogid_match = _PC_MBLOGID_RE.search(weibo_href)
+
+        uid = uid_match.group("uid")
+        return {
+            "id": int(mid),
+            "idstr": mid,
+            "mid": mid,
+            "mblogid": mblogid_match.group("mblogid") if mblogid_match else "",
+            "created_at": self._strip_html_fragment(from_match.group("created")),
+            "source": self._strip_html_fragment(source_match.group("source")) if source_match else "",
+            "text_raw": text_raw,
+            "reposts_count": counts["feed_list_forward"],
+            "comments_count": counts["feed_list_comment"],
+            "attitudes_count": counts["feed_list_like"],
+            "pic_ids": pic_ids,
+            "user": {
+                "id": int(uid),
+                "idstr": uid,
+                "screen_name": self._strip_html_fragment(user_match.group("name")),
+                "verified": "woo-avatar-icon" in block,
+                "profile_url": f"https:{user_href}" if user_href.startswith("//") else user_href,
+            },
+        }
+
+    def _parse_pc_search_html(self, html_text: str) -> dict[str, Any]:
+        card_matches = list(_PC_SEARCH_CARD_RE.finditer(html_text))
+        if not card_matches:
+            if any(marker in html_text.lower() for marker in _PC_SEARCH_PAGE_MARKERS):
+                return self._build_search_result([], source="pc")
+            raise WeiboApiError("PC 搜索未返回可解析页面")
+
+        statuses: list[dict[str, Any]] = []
+        for match in card_matches:
+            status = self._parse_pc_search_card(match.group("mid"), match.group(0))
+            if status:
+                statuses.append(status)
+
+        if not statuses:
+            raise WeiboApiError("PC 搜索解析失败")
+
+        return self._build_search_result(statuses, source="pc")
+
+    def search_weibo_pc(self, keyword: str, page: int = 1) -> dict[str, Any]:
+        """Search weibos by keyword using the desktop HTML search page."""
+        params = {
+            "q": keyword,
+            "rd": "realtime",
+            "tw": "realtime",
+            "Refer": "weibo_realtime",
+            "page": str(page),
+        }
+        headers = {
+            "Referer": f"{PC_SEARCH_BASE_URL}/realtime?q={quote(keyword)}&rd=realtime&tw=realtime&Refer=weibo_realtime&page={page}",
+        }
+        with self._build_pc_search_client() as pc:
+            html_text = self._request_html("GET", PC_REALTIME_SEARCH_URL, params=params, headers=headers, client=pc)
+        return self._parse_pc_search_html(html_text)
+
+    def search_weibo_mobile(self, keyword: str, page: int = 1) -> dict[str, Any]:
+        """Search weibos by keyword using the mobile JSON API."""
         containerid = f"100103type=61&q={keyword}"
         params = {
             "containerid": containerid,
@@ -350,7 +565,17 @@ class WeiboClient:
         }
         with self._build_mobile_client() as mobile:
             data = self._request("GET", MOBILE_SEARCH_URL, params=params, headers=headers, client=mobile)
-        return self._handle_response(data, "搜索", unwrap=False)
+        result = self._handle_response(data, "搜索", unwrap=False)
+        result["search_source"] = "mobile"
+        return result
+
+    def search_weibo(self, keyword: str, page: int = 1) -> dict[str, Any]:
+        """Search weibos by keyword, preferring PC search with mobile fallback."""
+        try:
+            return self.search_weibo_pc(keyword, page=page)
+        except WeiboApiError as exc:
+            logger.warning("PC search failed, falling back to mobile search: %s", exc)
+            return self.search_weibo_mobile(keyword, page=page)
 
     # ── Config ──────────────────────────────────────────────────────
 

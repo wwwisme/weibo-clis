@@ -16,7 +16,7 @@ from weibo_cli.commands.auth import (
     _extract_current_uid_from_homepage_html,
 )
 from weibo_cli.commands._common import format_count, strip_html
-from weibo_cli.exceptions import SessionExpiredError, WeiboApiError
+from weibo_cli.exceptions import CaptchaChallengeError, SessionExpiredError, WeiboApiError
 
 
 # ── strip_html tests ─────────────────────────────────────────────────
@@ -136,6 +136,15 @@ class TestHandleResponseUnwrap:
         with pytest.raises(SessionExpiredError):
             mock_client._handle_response(raw, "test")
 
+    def test_captcha_url_in_payload_raises_captcha_required(self, mock_client):
+        raw = {
+            "ok": 0,
+            "message": "请完成安全验证",
+            "url": "https://passport.weibo.com/verify?from=search",
+        }
+        with pytest.raises(CaptchaChallengeError):
+            mock_client._handle_response(raw, "test")
+
 
 # ── New API method tests ─────────────────────────────────────────────
 
@@ -159,6 +168,92 @@ def _mock_html_response(html, *, url):
     resp.cookies = httpx.Cookies()
     resp.url = httpx.URL(url)
     return resp
+
+
+def _pc_search_html():
+    return """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>微博搜索</title>
+    <script>
+        var $CONFIG = {};
+        $CONFIG['product'] = 'search';
+    </script>
+</head>
+<body>
+<div class="card-wrap" action-type="feed_list_item" mid="5277908669302546" >
+    <div class="card">
+        <div class="card-feed">
+            <div class="avator">
+                <a href="//weibo.com/7499890871?refer_flag=1001030103_"><span class="woo-avatar-icon"></span></a>
+            </div>
+            <div class="content" node-type="like">
+                <div class="info">
+                    <div style="padding: 6px 0 3px;">
+                        <a href="//weibo.com/7499890871?refer_flag=1001030103_" class="name" target="_blank">云养芋头</a>
+                    </div>
+                </div>
+                <div class="from">
+                    <a href="//weibo.com/7499890871/QwGL8D214?refer_flag=1001030103_" target="_blank">
+                        1分钟前
+                    </a>
+                    &nbsp;来自 <a href="//weibo.com/" rel="nofollow">冬天的第一场雪</a>
+                </div>
+                <p class="txt" node-type="feed_list_content" nick-name="云养芋头">
+                    我是真想吃喜茶的蛋挞<img src="https://face.t.sinajs.cn/test.png" title="[并不简单]" alt="[并不简单]" class="face" />
+                </p>
+            </div>
+        </div>
+        <div class="card-act">
+            <ul>
+                <li><a action-type="feed_list_forward">转发</a></li>
+                <li><a action-type="feed_list_comment"><span>3</span></a></li>
+                <li><a action-type="feed_list_like"><button><span class="woo-like-count">12</span></button></a></li>
+            </ul>
+        </div>
+    </div>
+</div>
+<!--/card-wrap-->
+<div class="card-wrap" action-type="feed_list_item" mid="5277908253018454" >
+    <div class="card">
+        <div class="card-feed">
+            <div class="content" node-type="like">
+                <div class="info">
+                    <div style="padding: 6px 0 3px;">
+                        <a href="//weibo.com/5229243284?refer_flag=1001030103_" class="name" target="_blank">-Pizzzal-</a>
+                    </div>
+                </div>
+                <div class="from">
+                    <a href="//weibo.com/5229243284/QwGKtcFeK?refer_flag=1001030103_" target="_blank">
+                        3分钟前
+                    </a>
+                    &nbsp;来自 <a href="//weibo.com/" rel="nofollow">iPhone客户端</a>
+                </div>
+                <p class="txt" node-type="feed_list_content" nick-name="-Pizzzal-">
+                    今天感觉特别幸福<br/>其实只是很平淡的一天。<a href="//weibo.com/5229243284/QwGKtcFeK?refer_flag=1001030103_" action-type="fl_unfold" target="_blank">展开<i class="wbicon">c</i></a>
+                </p>
+                <p class="txt" node-type="feed_list_content_full" nick-name="-Pizzzal-" style="display: none">
+                    今天感觉特别幸福<br/>其实只是很平淡的一天。<br/>所以最后我俩一人一杯喜茶。
+                </p>
+                <div node-type="feed_list_media_prev">
+                    <div action-data="uid=5229243284&mid=5277908253018454&pic_ids=502bae5a1,502bae5a2"></div>
+                </div>
+            </div>
+        </div>
+        <div class="card-act">
+            <ul>
+                <li><a action-type="feed_list_forward">8</a></li>
+                <li><a action-type="feed_list_comment">评论</a></li>
+                <li><a action-type="feed_list_like"><button><span class="woo-like-count">赞</span></button></a></li>
+            </ul>
+        </div>
+    </div>
+</div>
+<!--/card-wrap-->
+</body>
+</html>
+"""
 
 
 class TestGetFollowersAPI:
@@ -208,25 +303,80 @@ class TestGetConfigAPI:
 
 
 class TestSearchWeiboAPI:
-    def test_search_weibo_uses_mobile_client(self, mock_client):
-        """Verify search_weibo creates a separate mobile client."""
+    def test_search_weibo_pc_parses_html_results(self, mock_client):
+        mock_pc = MagicMock()
+        mock_pc.__enter__ = MagicMock(return_value=mock_pc)
+        mock_pc.__exit__ = MagicMock(return_value=False)
+        mock_pc.request.return_value = _mock_html_response(
+            _pc_search_html(),
+            url="https://s.weibo.com/realtime?q=%E5%96%9C%E8%8C%B6&rd=realtime&tw=realtime&Refer=weibo_realtime&page=1",
+        )
+
+        with patch.object(mock_client, "_build_pc_search_client", return_value=mock_pc):
+            result = mock_client.search_weibo_pc("喜茶")
+
+        assert result["search_source"] == "pc"
+        cards = result["data"]["cards"]
+        assert len(cards) == 2
+
+        first = cards[0]["mblog"]
+        assert first["mid"] == "5277908669302546"
+        assert first["mblogid"] == "QwGL8D214"
+        assert first["created_at"] == "1分钟前"
+        assert first["source"] == "冬天的第一场雪"
+        assert first["text_raw"] == "我是真想吃喜茶的蛋挞[并不简单]"
+        assert first["comments_count"] == 3
+        assert first["attitudes_count"] == 12
+        assert first["user"]["screen_name"] == "云养芋头"
+        assert first["user"]["verified"] is True
+
+        second = cards[1]["mblog"]
+        assert second["mblogid"] == "QwGKtcFeK"
+        assert second["text_raw"] == "今天感觉特别幸福\n其实只是很平淡的一天。\n所以最后我俩一人一杯喜茶。"
+        assert second["pic_ids"] == ["502bae5a1", "502bae5a2"]
+        assert second["reposts_count"] == 8
+        assert second["comments_count"] == 0
+        assert second["attitudes_count"] == 0
+
+    def test_search_weibo_prefers_pc_before_mobile(self, mock_client):
+        pc_result = {"ok": 1, "search_source": "pc", "data": {"cards": []}}
+        with patch.object(mock_client, "search_weibo_pc", return_value=pc_result) as mock_pc, \
+             patch.object(mock_client, "search_weibo_mobile") as mock_mobile:
+            result = mock_client.search_weibo("test")
+
+        assert result == pc_result
+        mock_pc.assert_called_once_with("test", page=1)
+        mock_mobile.assert_not_called()
+
+    def test_search_weibo_falls_back_to_mobile_when_pc_fails(self, mock_client):
+        search_response = {"ok": 1, "data": {"cards": []}}
+        with patch.object(mock_client, "search_weibo_pc", side_effect=WeiboApiError("pc failed")) as mock_pc, \
+             patch.object(mock_client, "search_weibo_mobile", return_value=search_response) as mock_mobile:
+            result = mock_client.search_weibo("test")
+
+        assert result == search_response
+        mock_pc.assert_called_once_with("test", page=1)
+        mock_mobile.assert_called_once_with("test", page=1)
+
+    def test_search_weibo_mobile_uses_mobile_client(self, mock_client):
+        """Verify mobile search creates a separate mobile client."""
         search_response = {"ok": 1, "data": {"cards": []}}
         mock_mobile = MagicMock()
         mock_mobile.__enter__ = MagicMock(return_value=mock_mobile)
         mock_mobile.__exit__ = MagicMock(return_value=False)
         mock_mobile.request.return_value = _mock_response(search_response)
 
-        with patch.object(mock_client, '_build_mobile_client', return_value=mock_mobile):
-            result = mock_client.search_weibo("test")
+        with patch.object(mock_client, "_build_mobile_client", return_value=mock_mobile):
+            result = mock_client.search_weibo_mobile("test")
 
-        assert result == search_response
+        assert result["search_source"] == "mobile"
         mock_mobile.request.assert_called_once()
         call_args = mock_mobile.request.call_args
         assert call_args[1]["params"]["containerid"] == "100103type=61&q=test"
         assert "page" not in call_args[1]["params"]
         assert call_args[1]["headers"]["Referer"].endswith("containerid=100103type%3D61%26q%3Dtest")
 
-    def test_search_weibo_login_payload_raises_session_expired(self, mock_client):
+    def test_search_weibo_mobile_login_payload_raises_session_expired(self, mock_client):
         response = {"ok": 0, "message": "请先登录"}
         mock_mobile = MagicMock()
         mock_mobile.__enter__ = MagicMock(return_value=mock_mobile)
@@ -238,9 +388,9 @@ class TestSearchWeiboAPI:
 
         with patch.object(mock_client, "_build_mobile_client", return_value=mock_mobile):
             with pytest.raises(SessionExpiredError):
-                mock_client.search_weibo("test")
+                mock_client.search_weibo_mobile("test")
 
-    def test_search_weibo_html_login_page_raises_session_expired(self, mock_client):
+    def test_search_weibo_mobile_html_login_page_raises_session_expired(self, mock_client):
         html = "<html><title>微博通行证</title><body>请先登录</body></html>"
         mock_mobile = MagicMock()
         mock_mobile.__enter__ = MagicMock(return_value=mock_mobile)
@@ -252,9 +402,23 @@ class TestSearchWeiboAPI:
 
         with patch.object(mock_client, "_build_mobile_client", return_value=mock_mobile):
             with pytest.raises(SessionExpiredError):
-                mock_client.search_weibo("test")
+                mock_client.search_weibo_mobile("test")
 
-    def test_search_weibo_generic_html_stays_api_error(self, mock_client):
+    def test_search_weibo_mobile_html_captcha_page_raises_captcha_required(self, mock_client):
+        html = "<html><title>安全验证</title><body>请输入验证码</body></html>"
+        mock_mobile = MagicMock()
+        mock_mobile.__enter__ = MagicMock(return_value=mock_mobile)
+        mock_mobile.__exit__ = MagicMock(return_value=False)
+        mock_mobile.request.return_value = _mock_html_response(
+            html,
+            url="https://passport.weibo.com/verify?from=search",
+        )
+
+        with patch.object(mock_client, "_build_mobile_client", return_value=mock_mobile):
+            with pytest.raises(CaptchaChallengeError):
+                mock_client.search_weibo_mobile("test")
+
+    def test_search_weibo_mobile_generic_html_stays_api_error(self, mock_client):
         html = "<html><body><h1>502 Bad Gateway</h1></body></html>"
         mock_mobile = MagicMock()
         mock_mobile.__enter__ = MagicMock(return_value=mock_mobile)
@@ -266,7 +430,7 @@ class TestSearchWeiboAPI:
 
         with patch.object(mock_client, "_build_mobile_client", return_value=mock_mobile):
             with pytest.raises(WeiboApiError, match="Received HTML instead of JSON"):
-                mock_client.search_weibo("test")
+                mock_client.search_weibo_mobile("test")
 
 
 class TestMeCommand:

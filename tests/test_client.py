@@ -10,7 +10,7 @@ import pytest
 
 from weibo_cli.auth import Credential
 from weibo_cli.client import WeiboClient
-from weibo_cli.exceptions import SessionExpiredError, WeiboApiError
+from weibo_cli.exceptions import CaptchaChallengeError, SessionExpiredError, WeiboApiError
 
 
 # ── Response handling ────────────────────────────────────────────────
@@ -32,9 +32,19 @@ class TestHandleResponse:
         with pytest.raises(SessionExpiredError):
             mock_client._handle_response(raw, "test")
 
+    def test_ok_minus_100_verify_url_raises_captcha_required(self, mock_client):
+        raw = {"ok": -100, "url": "https://passport.weibo.com/verify?from=search"}
+        with pytest.raises(CaptchaChallengeError):
+            mock_client._handle_response(raw, "test")
+
     def test_ok_0_login_message_raises_session_expired(self, mock_client):
         raw = {"ok": 0, "message": "请先登录"}
         with pytest.raises(SessionExpiredError):
+            mock_client._handle_response(raw, "test")
+
+    def test_ok_0_captcha_message_raises_captcha_required(self, mock_client):
+        raw = {"ok": 0, "message": "请输入验证码后继续访问"}
+        with pytest.raises(CaptchaChallengeError):
             mock_client._handle_response(raw, "test")
 
     def test_ok_0_login_后使用_raises_session_expired(self, mock_client):

@@ -22,6 +22,16 @@ class SessionExpiredError(WeiboApiError):
         )
 
 
+class CaptchaChallengeError(WeiboApiError):
+    """Raised when Weibo requires captcha or risk verification."""
+
+    def __init__(self):
+        super().__init__(
+            "触发验证码风控，请先在浏览器打开 m.weibo.cn 完成验证，然后执行 weibo logout && weibo login",
+            code="captcha_required",
+        )
+
+
 class AuthRequiredError(WeiboApiError):
     """Raised when user is not logged in."""
 
@@ -52,6 +62,8 @@ class QRExpiredError(WeiboApiError):
 
 def error_code_for_exception(exc: Exception) -> str:
     """Map domain exceptions to stable error code strings."""
+    if isinstance(exc, CaptchaChallengeError):
+        return "captcha_required"
     if isinstance(exc, (AuthRequiredError, SessionExpiredError)):
         return "not_authenticated"
     if isinstance(exc, RateLimitError):

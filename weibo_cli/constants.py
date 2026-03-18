@@ -42,6 +42,8 @@ FRIENDS_URL = "/ajax/friendships/friends"        # GET ?uid= → following list
 FOLLOWERS_URL = "/ajax/friendships/friends"      # GET ?uid=&relate=fans → follower list
 
 # ── Search ──────────────────────────────────────────────────────────
+PC_SEARCH_BASE_URL = "https://s.weibo.com"
+PC_REALTIME_SEARCH_URL = "/realtime"          # GET → PC realtime search (HTML)
 MOBILE_BASE_URL = "https://m.weibo.cn"
 MOBILE_SEARCH_URL = "/api/container/getIndex"    # GET → mobile search (keyword)
 MOBILE_HEADERS = {
@@ -74,6 +76,15 @@ HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Referer": f"{BASE_URL}/",
+}
+
+PC_SEARCH_HEADERS = {
+    **HEADERS,
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
+    "Referer": f"{PC_SEARCH_BASE_URL}/",
 }
 
 # ── Passport-specific headers ───────────────────────────────────────

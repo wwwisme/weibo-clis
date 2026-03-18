@@ -28,7 +28,7 @@ def test_version():
     runner = CliRunner()
     result = runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
-    assert "0.2.2" in result.output
+    assert "0.2.3" in result.output
 
 
 EXPECTED_COMMANDS = [
@@ -71,10 +71,12 @@ def test_constants_headers():
 
 
 def test_exception_hierarchy():
-    from weibo_cli.exceptions import WeiboApiError, SessionExpiredError, QRExpiredError, error_code_for_exception
+    from weibo_cli.exceptions import CaptchaChallengeError, WeiboApiError, SessionExpiredError, QRExpiredError, error_code_for_exception
     assert issubclass(SessionExpiredError, WeiboApiError)
+    assert issubclass(CaptchaChallengeError, WeiboApiError)
     assert issubclass(QRExpiredError, WeiboApiError)
     assert error_code_for_exception(SessionExpiredError()) == "not_authenticated"
+    assert error_code_for_exception(CaptchaChallengeError()) == "captcha_required"
     assert error_code_for_exception(QRExpiredError()) == "qr_expired"
 
 
